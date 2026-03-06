@@ -13,7 +13,7 @@ st.sidebar.markdown("Choisissez l'algorithme à utiliser pour protéger les embe
 
 choix_methode = st.sidebar.selectbox(
     "Méthode cryptographique :",
-    ("Standard (Simulation AES)", "Avancée (Simulation FHE)")
+    ("Simulation AES", "Simulation FHE")
 )
 
 # --- ROUTAGE DE LA LOGIQUE ---
@@ -22,8 +22,6 @@ if choix_methode == "Simulation AES":
     fonction_encryption = methode_aes.encrypt
 elif choix_methode == "Simulation FHE":
     fonction_encryption = methode_fhe.encrypt
-else:
-    fonction_encryption = None
 
 
 # --- INITIALISATION DE LA MÉMOIRE ---
@@ -66,17 +64,18 @@ if prompt:
         with st.spinner(f"Cryptographie en cours via {choix_methode}..."):
             # Appel de la fonction dynamique
             encrypted_payload, temps_exec = fonction_encryption(prompt)
-            
+            print("hello")
             # Affichage du log avec le temps de traitement
             log_text = f"> REÇU (Temps de chiffrement: {temps_exec}s)\n{encrypted_payload}"
             st.session_state.server_logs.append(log_text)
-            st.rerun() # Force le rafraîchissement pour afficher le log avant la réponse
 
     # 2. Simulation de la réponse LLM et décryptage (Vue Utilisateur)
     with col_user:
         with st.chat_message("assistant"):
             with st.spinner("Décryptage de la réponse LLM..."):
+                print("serveur")
                 time.sleep(1) # Simulation de l'attente réseau
                 final_response = f"Réponse sécurisée traitée avec succès en utilisant la méthode : {choix_methode}."
                 st.markdown(final_response)
         st.session_state.messages.append({"role": "assistant", "content": final_response})
+        st.rerun() # Force le rafraîchissement pour afficher le log avant la réponse
