@@ -3,26 +3,27 @@ import time
 import random
 
 # Importation dynamique des méthodes depuis ton dossier
-from methods import methode_aes, methode_fhe
+from methods import methode_MOAI, methode_compact, methode_HE_SecureNet
 
 st.set_page_config(layout="wide", page_title="Secure LLM Chat", page_icon="🔒")
 
 # --- BARRE LATÉRALE (SIDEBAR) ---
-st.sidebar.title("⚙️ Paramètres d'Encryption")
+st.sidebar.title("Paramètres d'Encryption")
 st.sidebar.markdown("Choisissez l'algorithme à utiliser pour protéger les embeddings.")
 
 choix_methode = st.sidebar.selectbox(
     "Méthode cryptographique :",
-    ("Simulation AES", "Simulation FHE")
+    ("Simulation Compact", "Simulation MOAI", "Simulation HE-SecureNet")
 )
 
 # --- ROUTAGE DE LA LOGIQUE ---
 # On assigne la fonction correcte selon le choix de l'utilisateur
-if choix_methode == "Simulation AES":
-    fonction_encryption = methode_aes.encrypt
-elif choix_methode == "Simulation FHE":
-    fonction_encryption = methode_fhe.encrypt
-
+if choix_methode == "Simulation Compact":
+    fonction_encryption = methode_compact.encrypt
+elif choix_methode == "Simulation MOAI":
+    fonction_encryption = methode_MOAI.encrypt
+elif choix_methode == "Simulation HE-SecureNet":
+    fonction_encryption = methode_HE_SecureNet.encrypt
 
 # --- INITIALISATION DE LA MÉMOIRE ---
 if "messages" not in st.session_state:
