@@ -64,7 +64,6 @@ if prompt:
         with st.spinner(f"Cryptographie en cours via {choix_methode}..."):
             # Appel de la fonction dynamique
             encrypted_payload, temps_exec = fonction_encryption(prompt)
-            print("hello")
             # Affichage du log avec le temps de traitement
             log_text = f"> REÇU (Temps de chiffrement: {temps_exec}s)\n{encrypted_payload}"
             st.session_state.server_logs.append(log_text)
@@ -73,7 +72,6 @@ if prompt:
     with col_user:
         with st.chat_message("assistant"):
             with st.spinner("Décryptage de la réponse LLM..."):
-                print("serveur")
                 time.sleep(1) # Simulation de l'attente réseau
                 final_response = f"Réponse sécurisée traitée avec succès en utilisant la méthode : {choix_methode}."
                 st.markdown(final_response)
