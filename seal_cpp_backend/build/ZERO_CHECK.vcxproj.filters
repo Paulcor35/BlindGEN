@@ -1,0 +1,13 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="17.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <CustomBuild Include="C:\Users\willi\Documents\ISEN\M2\Projet start up\BlindGEN\seal_cpp_backend\build\CMakeFiles\f9dee02dbb3417d6f346f16d43ebf820\generate.stamp.rule">
+      <Filter>CMake Rules</Filter>
+    </CustomBuild>
+  </ItemGroup>
+  <ItemGroup>
+    <Filter Include="CMake Rules">
+      <UniqueIdentifier>{826D48E5-15A0-3E2E-8BF7-5DCADF7EB080}</UniqueIdentifier>
+    </Filter>
+  </ItemGroup>
+</Project>

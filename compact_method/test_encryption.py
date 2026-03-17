@@ -19,33 +19,39 @@ class BlindSDK:
     """SDK local à l'entreprise pour sécuriser les données avant envoi."""
     
     def __init__(self, model_name='distilbert-base-uncased'):
-        print(f"[SDK] Initialisation du SDK avec {model_name}...")
+        # Détection du GPU
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[SDK] Initialisation du SDK sur : {str(self.device).upper()}...")
+        
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.embedding_model = DistilBertModel.from_pretrained(model_name).embeddings
+        # On déplace le modèle d'embedding sur le GPU
+        self.embedding_model = DistilBertModel.from_pretrained(model_name).embeddings.to(self.device)
         self.embedding_model.eval()
         
-        # Configuration FHE (CKKS) - Ajustée pour supporter la profondeur du polynôme
+        # Configuration FHE (CKKS)
         self.context = ts.context(
             ts.SCHEME_TYPE.CKKS,
-            poly_modulus_degree=16384,         # 16384 permet jusqu'à ~7-8 niveaux
-            coeff_mod_bit_sizes=[60, 30, 30, 30, 30, 30, 30, 60] # + de niveaux pour le matmul + polyval
+            poly_modulus_degree=16384,
+            coeff_mod_bit_sizes=[60, 30, 30, 30, 30, 30, 30, 60]
         )
         self.context.generate_galois_keys()
         self.context.generate_relin_keys()
-        self.context.global_scale = 2 ** 30    # Réduit à 2^30 pour gagner en profondeur
+        self.context.global_scale = 2 ** 30
         
     def encrypt_text(self, text):
         """Transforme le texte en embeddings chiffrés."""
         print(f"[SDK] Encodage et chiffrement de: '{text[:30]}...'")
-        inputs = self.tokenizer(text, return_tensors="pt")
+        inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
         
         with torch.no_grad():
             embeddings = self.embedding_model(inputs['input_ids'])
+            # On ramène sur le CPU pour le chiffrement TenSEAL (ne supporte pas CUDA)
+            embeddings_cpu = embeddings.cpu()
             
         # Chiffrement chaque token (vecteur)
         encrypted_vectors = []
-        for i in range(embeddings.shape[1]):
-            vec = embeddings[0, i, :].numpy().tolist()
+        for i in range(embeddings_cpu.shape[1]):
+            vec = embeddings_cpu[0, i, :].numpy().tolist()
             enc_vec = ts.ckks_vector(self.context, vec)
             encrypted_vectors.append(enc_vec)
             
@@ -55,13 +61,15 @@ class BlindServer:
     """Serveur d'inférence traitant uniquement des vecteurs chiffrés."""
     
     def __init__(self, model_name='distilbert-base-uncased'):
-        print(f"[SERVER] Chargement des couches du modèle {model_name}...")
+        # Le serveur peut aussi charger les couches sur GPU pour les opérations claires
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"[SERVER] Chargement des couches sur : {str(self.device).upper()}...")
+        
         full_model = DistilBertModel.from_pretrained(model_name)
-        self.layer = full_model.transformer.layer[0] # On utilise la 1ère couche pour démo
+        self.layer = full_model.transformer.layer[0].to(self.device)
         self.layer.eval()
         
         # Initialisation de la méthode COMPACT pour GELU
-        # On utilise un polynôme de degré 4 sur 1 seul morceau pour FHE (efficience)
         self.compact_gelu = CompactActivation(func_type='gelu', m=1, k=4, range_val=(-4, 4))
         self.gelu_coeffs = self.compact_gelu.pieces[0]['poly'].convert(kind=np.polynomial.Polynomial).coef.tolist()
         
@@ -107,8 +115,9 @@ class BlindServer:
 
         # 1. Couche Attention (Opérations linéaires)
         print("[SERVER] Calcul des projections Q, K, V en FHE...")
-        W_q = self.layer.attention.q_lin.weight.detach().numpy().T
-        b_q = self.layer.attention.q_lin.bias.detach().numpy()
+        # On extrait les poids (on les garde sur CPU car TenSEAL matmul est CPU)
+        W_q = self.layer.attention.q_lin.weight.detach().cpu().numpy().T
+        b_q = self.layer.attention.q_lin.bias.detach().cpu().numpy()
         
         # Simulation simplification : On traite juste Q pour la démo de performance
         processed_Q = []
@@ -120,8 +129,8 @@ class BlindServer:
         # 2. Feed-Forward avec Méthode COMPACT
         print("[SERVER] Application du Feed-Forward + Activation COMPACT (aveugle)...")
         # On réduit encore la taille pour que la démo soit plus rapide (128 -> 16 neurones)
-        W_ff1 = self.layer.ffn.lin1.weight.detach().numpy().T[:768, :16] 
-        b_ff1 = self.layer.ffn.lin1.bias.detach().numpy()[:16]
+        W_ff1 = self.layer.ffn.lin1.weight.detach().cpu().numpy().T[:768, :16] 
+        b_ff1 = self.layer.ffn.lin1.bias.detach().cpu().numpy()[:16]
         
         final_results = []
         for q_i in processed_Q:
