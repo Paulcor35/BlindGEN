@@ -1,80 +1,114 @@
 import streamlit as st
 import time
-import random
 
-# Importation dynamique des méthodes depuis ton dossier
-from methods import methode_MOAI, methode_compact, methode_HE_SecureNet
+# --- IMPORTATION DU MOTEUR COMPACT ---
+# On importe les classes et la fonction pipeline depuis le dossier engines
+from engines.engine_compact import BlindSDK, BlindServer, run_compact_pipeline
 
-st.set_page_config(layout="wide", page_title="Secure LLM Chat", page_icon="🔒")
+st.set_page_config(layout="wide", page_title="BlindGEN Benchmark", page_icon="🔒")
 
-# --- BARRE LATÉRALE (SIDEBAR) ---
-st.sidebar.title("Paramètres d'Encryption")
-st.sidebar.markdown("Choisissez l'algorithme à utiliser pour protéger les embeddings.")
+# --- MISE EN CACHE DES MODÈLES LOURDS ---
+# @st.cache_resource permet de ne charger les modèles qu'une seule fois au démarrage de l'app
+@st.cache_resource
+def init_fhe_models():
+    with st.spinner("Initialisation du moteur cryptographique FHE (cela peut prendre quelques secondes)..."):
+        sdk = BlindSDK()
+        server = BlindServer()
+    return sdk, server
 
-choix_methode = st.sidebar.selectbox(
-    "Méthode cryptographique :",
-    ("Simulation Compact", "Simulation MOAI", "Simulation HE-SecureNet")
+# Chargement effectif des modèles en mémoire
+sdk_compact, server_compact = init_fhe_models()
+
+# --- BARRE LATÉRALE : SÉLECTION DE LA MÉTHODE ---
+st.sidebar.title("Banc d'essai FHE")
+st.sidebar.markdown("Sélectionnez l'architecture papier à évaluer :")
+
+choix_methode = st.sidebar.radio(
+    "Architecture d'inférence aveugle :",
+    ["Compact (PoPETS 2024)", "MOAI", "HE-SecureNet"]
 )
 
-# --- ROUTAGE DE LA LOGIQUE ---
-# On assigne la fonction correcte selon le choix de l'utilisateur
-if choix_methode == "Simulation Compact":
-    fonction_encryption = methode_compact.encrypt
-elif choix_methode == "Simulation MOAI":
-    fonction_encryption = methode_MOAI.encrypt
-elif choix_methode == "Simulation HE-SecureNet":
-    fonction_encryption = methode_HE_SecureNet.encrypt
+# --- FONCTION DE ROUTAGE ---
+def router_inference(texte, methode):
+    """Aiguille la requête vers le bon code selon le choix de l'utilisateur."""
+    if methode == "Compact (PoPETS 2024)":
+        # Appel du vrai moteur fonctionnel développé par ton collègue
+        return run_compact_pipeline(texte, sdk_compact, server_compact)
+        
+    elif methode == "MOAI":
+        # Simulation en attendant que l'équipe termine le code
+        time.sleep(1.5)
+        return "[0xA1B2C3_MOAI_SIMULATION...]", 1.5, "Optimisation du packing (En développement)"
+        
+    elif methode == "HE-SecureNet":
+        # Simulation en attendant que l'équipe termine le code
+        time.sleep(3)
+        return "[0x9F8E7D_SECURENET_SIMULATION...]", 3.2, "Réseau sécurisé spécifique (En développement)"
 
-# --- INITIALISATION DE LA MÉMOIRE ---
+# --- INITIALISATION DE LA MÉMOIRE DU CHAT ---
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "server_logs" not in st.session_state:
     st.session_state.server_logs = []
 
 # --- INTERFACE PRINCIPALE ---
-st.title("Chatbot Sécurisé")
+st.title("Inférence Sécurisée - Benchmark des Architectures")
+st.markdown("Démonstration en direct du traitement d'embeddings chiffrés.")
 st.divider()
 
 col_user, col_server = st.columns(2)
 
+# --- COLONNE GAUCHE : CLIENT ---
 with col_user:
-    st.subheader("Vue Utilisateur")
+    st.subheader("👤 Vue Client (Local)")
     for msg in st.session_state.messages:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             
-    prompt = st.chat_input("Posez votre question...")
+    prompt = st.chat_input("Envoyer un texte à analyser en toute sécurité...")
 
+# --- COLONNE DROITE : SERVEUR ---
 with col_server:
-    st.subheader("Vue Serveur (Données interceptées)")
+    st.subheader("Vue Serveur (Cloud)")
+    st.info("Ce que le serveur intercepte et manipule (Totalement chiffré).")
     log_container = st.container(height=500)
     with log_container:
         for log in st.session_state.server_logs:
             st.code(log, language="bash")
 
-# --- EXÉCUTION LORS DE L'ENVOI ---
+# --- LOGIQUE D'EXÉCUTION LORS DE L'ENVOI ---
 if prompt:
-    # Affiche le message de l'utilisateur instantanément
+    # 1. Affichage immédiat du message utilisateur
     st.session_state.messages.append({"role": "user", "content": prompt})
     with col_user:
         with st.chat_message("user"):
             st.markdown(prompt)
             
-    # 1. Utilisation de la méthode choisie dans la sidebar (Vue Serveur)
+    # 2. Routage vers le moteur FHE sélectionné (Affiché côté Serveur)
     with col_server:
-        with st.spinner(f"Cryptographie en cours via {choix_methode}..."):
-            # Appel de la fonction dynamique
-            encrypted_payload, temps_exec = fonction_encryption(prompt)
-            # Affichage du log avec le temps de traitement
-            log_text = f"> REÇU (Temps de chiffrement: {temps_exec}s)\n{encrypted_payload}"
-            st.session_state.server_logs.append(log_text)
+        with st.spinner(f"Exécution de l'algorithme {choix_methode}..."):
+            
+            # ---> C'est ici que la magie opère <---
+            resultat_chiffre, temps_exec, desc = router_inference(prompt, choix_methode)
+            
+            # Formatage du log pour prouver au jury que la donnée est chiffrée
+            log_serveur = f"> REÇU VIA {choix_methode.upper()} (Durée: {temps_exec}s)\n"
+            log_serveur += f"> Spécificité : {desc}\n"
+            log_serveur += f"> Ciphertext manipulé : {resultat_chiffre}"
+            
+            st.session_state.server_logs.append(log_serveur)
 
-    # 2. Simulation de la réponse LLM et décryptage (Vue Utilisateur)
+    # 3. Retour au client, déchiffrement et affichage final
     with col_user:
         with st.chat_message("assistant"):
-            with st.spinner("Décryptage de la réponse LLM..."):
-                time.sleep(1) # Simulation de l'attente réseau
-                final_response = f"Réponse sécurisée traitée avec succès en utilisant la méthode : {choix_methode}."
-                st.markdown(final_response)
-        st.session_state.messages.append({"role": "assistant", "content": final_response})
-        st.rerun() # Force le rafraîchissement pour afficher le log avant la réponse
+            with st.spinner("Déchiffrement local (Clé Secrète)..."):
+                # Simulation d'un petit temps de réseau retour
+                time.sleep(0.5) 
+                
+                reponse = f"**Analyse FHE terminée via {choix_methode} !**\n\n"
+                reponse += f"Le serveur a traité vos données à l'aveugle. "
+                reponse += f"Voici les métadonnées de l'opération :\n- **Temps total :** {temps_exec}s\n- **Détails :** {desc}"
+                
+                st.markdown(reponse)
+                
+        st.session_state.messages.append({"role": "assistant", "content": reponse})
