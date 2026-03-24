@@ -2,8 +2,16 @@ cmake_minimum_required(VERSION 3.13)
 project(BlindGEN_Server)
 
 # Find pybind11 using standard CMake search mechanism
-# This will work anywhere as long as pybind11 is installed in the system/env
-find_package(pybind11 REQUIRED)
+# If not found (common for pip-installed pybind11), try using Python's module info
+find_package(pybind11 QUIET)
+if(NOT pybind11_FOUND)
+    execute_process(
+        COMMAND python3 -m pybind11 --cmakedir
+        OUTPUT_VARIABLE pybind11_DIR
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    find_package(pybind11 REQUIRED)
+endif()
 
 # SEAL configuration
 set(SEAL_BUILD_TESTS OFF CACHE BOOL "" FORCE)
