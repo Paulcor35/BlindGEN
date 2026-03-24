@@ -7,7 +7,7 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # On importe le vrai moteur FHE C++ depuis compact_method
-from compact_method.blind_chat_cpp import BlindChatCpp
+from compact_method.blind_chat_cpp import BlindChatCpp, MAX_TOKENS
 
 st.set_page_config(layout="wide", page_title="BlindGEN - Inférence Souveraine", page_icon="🔒")
 
@@ -26,9 +26,6 @@ choix_methode = st.sidebar.radio(
     "Architecture d'inférence aveugle :",
     ["Compact (PoPETS 2024)", "MOAI", "HE-SecureNet"]
 )
-
-# Paramètres ajustables
-max_tokens = st.sidebar.slider("Nombre max de tokens", 5, 200, 50)
 
 # --- INITIALISATION DE LA MÉMOIRE DU CHAT ---
 if "messages" not in st.session_state:
@@ -56,10 +53,16 @@ with col_user:
 with col_server:
     st.subheader("🖥️ Vue Serveur (Cloud)")
     st.info("Ce que le serveur intercepte et manipule (Totalement chiffré).")
-    log_container = st.container(height=500)
-    with log_container:
+    server_placeholder = st.empty()
+
+# Fonction pour rafraîchir les logs serveur en temps réel
+def refresh_server_logs():
+    with server_placeholder.container(height=500):
         for log in st.session_state.server_logs:
-            st.code(log, language="bash")
+            st.text(log)
+
+# Rendu initial des logs existants
+refresh_server_logs()
 
 # --- LOGIQUE D'EXÉCUTION LORS DE L'ENVOI ---
 if prompt:
@@ -84,9 +87,10 @@ if prompt:
                     f"> [COMPACT] Requête reçue. Chiffrement Full-FHE (Ciphertext x Ciphertext).\n"
                     f"> Le serveur ne peut PAS lire la requête ni les poids du modèle."
                 )
+                refresh_server_logs()
 
                 # Génération Token par Token avec le vrai moteur SEAL
-                for step_data in fhe_engine.chat_stream(prompt, max_tokens=max_tokens):
+                for step_data in fhe_engine.chat_stream(prompt, max_tokens=MAX_TOKENS):
                     # --- Vue Client : affichage progressif du texte ---
                     full_response += step_data["word"]
                     message_placeholder.markdown(full_response + "▌")
@@ -97,12 +101,14 @@ if prompt:
                         f"⚙️ [OPÉRATION AVEUGLE] {step_data['enc_bytes_len']} octets chiffrés traités | "
                         f"Temps FHE: {step_data['exec_time']*1000:.1f}ms"
                     )
+                    refresh_server_logs()
 
                 # Fin de la génération
                 message_placeholder.markdown(full_response)
                 st.session_state.server_logs.append(
                     f"✅ [TERMINÉ] Inférence complète. Temps FHE cumulé: {total_fhe_time:.2f}s"
                 )
+                refresh_server_logs()
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
 
     # =============================================

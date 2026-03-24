@@ -5,6 +5,9 @@ Ce script utilise le module C++ compilé via PyBind11 pour
 effectuer les calculs Microsoft SEAL à une vitesse maximale.
 """
 
+# --- CONFIGURATION GLOBALE ---
+MAX_TOKENS = 10000
+
 import torch
 import numpy as np
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
@@ -40,7 +43,7 @@ class BlindChatCpp:
         self.model = GPT2LMHeadModel.from_pretrained('gpt2')
         print("  [SERVER] Modèle GPT-2 prêt.")
 
-    def chat_stream(self, prompt, max_tokens=1000):
+    def chat_stream(self, prompt, max_tokens=MAX_TOKENS):
         current_text = prompt
         
         # --- ÉTAPE 0 : LE CLIENT CHIFFRE LE MODÈLE (Une fois au début) ---
@@ -109,7 +112,7 @@ class BlindChatCpp:
         print(f"  [GPT-2 SOUVERAIN] ", end="", flush=True)
         
         first = True
-        for step_data in self.chat_stream(prompt, 1000):
+        for step_data in self.chat_stream(prompt, MAX_TOKENS):
             if first:
                 print(f"\n      [STATUS] Inférence sur données + modèle chiffrés")
                 print(f"      [CLIENT] Réponse reçue ({step_data['enc_bytes_len']} octets)")
