@@ -1,4 +1,4 @@
 */build/*
 */CMakeFiles/*
 CMakeCache.txt
-__pycache__
+*/__pycache__/*
