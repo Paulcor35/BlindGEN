@@ -1,23 +1,22 @@
 import streamlit as st
 import time
+import sys
+import os
 
-# --- IMPORTATION DU MOTEUR COMPACT ---
-# On importe les classes et la fonction pipeline depuis le dossier engines
-from engines.engine_compact import BlindSDK, BlindServer, run_compact_pipeline
+# Ajout du path pour trouver le module C++ (.pyd) et le dossier compact_method
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-st.set_page_config(layout="wide", page_title="BlindGEN Benchmark", page_icon="🔒")
+# On importe le vrai moteur FHE C++ depuis compact_method
+from compact_method.blind_chat_cpp import BlindChatCpp
 
-# --- MISE EN CACHE DES MODÈLES LOURDS ---
-# @st.cache_resource permet de ne charger les modèles qu'une seule fois au démarrage de l'app
+st.set_page_config(layout="wide", page_title="BlindGEN - Inférence Souveraine", page_icon="🔒")
+
+# --- MISE EN CACHE DU MOTEUR FHE (chargé une seule fois) ---
 @st.cache_resource
-def init_fhe_models():
-    with st.spinner("Initialisation du moteur cryptographique FHE (cela peut prendre quelques secondes)..."):
-        sdk = BlindSDK()
-        server = BlindServer()
-    return sdk, server
+def init_fhe_engine():
+    return BlindChatCpp()
 
-# Chargement effectif des modèles en mémoire
-sdk_compact, server_compact = init_fhe_models()
+fhe_engine = init_fhe_engine()
 
 # --- BARRE LATÉRALE : SÉLECTION DE LA MÉTHODE ---
 st.sidebar.title("Banc d'essai FHE")
@@ -28,22 +27,8 @@ choix_methode = st.sidebar.radio(
     ["Compact (PoPETS 2024)", "MOAI", "HE-SecureNet"]
 )
 
-# --- FONCTION DE ROUTAGE ---
-def router_inference(texte, methode):
-    """Aiguille la requête vers le bon code selon le choix de l'utilisateur."""
-    if methode == "Compact (PoPETS 2024)":
-        # Appel du vrai moteur fonctionnel développé par ton collègue
-        return run_compact_pipeline(texte, sdk_compact, server_compact)
-        
-    elif methode == "MOAI":
-        # Simulation en attendant que l'équipe termine le code
-        time.sleep(1.5)
-        return "[0xA1B2C3_MOAI_SIMULATION...]", 1.5, "Optimisation du packing (En développement)"
-        
-    elif methode == "HE-SecureNet":
-        # Simulation en attendant que l'équipe termine le code
-        time.sleep(3)
-        return "[0x9F8E7D_SECURENET_SIMULATION...]", 3.2, "Réseau sécurisé spécifique (En développement)"
+# Paramètres ajustables
+max_tokens = st.sidebar.slider("Nombre max de tokens", 5, 200, 50)
 
 # --- INITIALISATION DE LA MÉMOIRE DU CHAT ---
 if "messages" not in st.session_state:
@@ -53,7 +38,7 @@ if "server_logs" not in st.session_state:
 
 # --- INTERFACE PRINCIPALE ---
 st.title("Inférence Sécurisée - Benchmark des Architectures")
-st.markdown("Démonstration en direct du traitement d'embeddings chiffrés.")
+st.markdown("Démonstration en direct du traitement d'embeddings chiffrés via Microsoft SEAL (C++).")
 st.divider()
 
 col_user, col_server = st.columns(2)
@@ -69,7 +54,7 @@ with col_user:
 
 # --- COLONNE DROITE : SERVEUR ---
 with col_server:
-    st.subheader("Vue Serveur (Cloud)")
+    st.subheader("🖥️ Vue Serveur (Cloud)")
     st.info("Ce que le serveur intercepte et manipule (Totalement chiffré).")
     log_container = st.container(height=500)
     with log_container:
@@ -83,32 +68,72 @@ if prompt:
     with col_user:
         with st.chat_message("user"):
             st.markdown(prompt)
-            
-    # 2. Routage vers le moteur FHE sélectionné (Affiché côté Serveur)
-    with col_server:
-        with st.spinner(f"Exécution de l'algorithme {choix_methode}..."):
-            
-            # ---> C'est ici que la magie opère <---
-            resultat_chiffre, temps_exec, desc = router_inference(prompt, choix_methode)
-            
-            # Formatage du log pour prouver au jury que la donnée est chiffrée
-            log_serveur = f"> REÇU VIA {choix_methode.upper()} (Durée: {temps_exec}s)\n"
-            log_serveur += f"> Spécificité : {desc}\n"
-            log_serveur += f"> Ciphertext manipulé : {resultat_chiffre}"
-            
-            st.session_state.server_logs.append(log_serveur)
 
-    # 3. Retour au client, déchiffrement et affichage final
-    with col_user:
-        with st.chat_message("assistant"):
-            with st.spinner("Déchiffrement local (Clé Secrète)..."):
-                # Simulation d'un petit temps de réseau retour
-                time.sleep(0.5) 
+    # =============================================
+    # COMPACT (PoPETS 2024) - VRAI MOTEUR C++ SEAL
+    # =============================================
+    if choix_methode == "Compact (PoPETS 2024)":
+        with col_user:
+            with st.chat_message("assistant"):
+                message_placeholder = st.empty()
+                full_response = ""
+                total_fhe_time = 0.0
                 
-                reponse = f"**Analyse FHE terminée via {choix_methode} !**\n\n"
-                reponse += f"Le serveur a traité vos données à l'aveugle. "
-                reponse += f"Voici les métadonnées de l'opération :\n- **Temps total :** {temps_exec}s\n- **Détails :** {desc}"
-                
+                # Log initial côté serveur
+                st.session_state.server_logs.append(
+                    f"> [COMPACT] Requête reçue. Chiffrement Full-FHE (Ciphertext x Ciphertext).\n"
+                    f"> Le serveur ne peut PAS lire la requête ni les poids du modèle."
+                )
+
+                # Génération Token par Token avec le vrai moteur SEAL
+                for step_data in fhe_engine.chat_stream(prompt, max_tokens=max_tokens):
+                    # --- Vue Client : affichage progressif du texte ---
+                    full_response += step_data["word"]
+                    message_placeholder.markdown(full_response + "▌")
+                    
+                    # --- Vue Serveur : log de chaque opération aveugle ---
+                    total_fhe_time += step_data["exec_time"]
+                    st.session_state.server_logs.append(
+                        f"⚙️ [OPÉRATION AVEUGLE] {step_data['enc_bytes_len']} octets chiffrés traités | "
+                        f"Temps FHE: {step_data['exec_time']*1000:.1f}ms"
+                    )
+
+                # Fin de la génération
+                message_placeholder.markdown(full_response)
+                st.session_state.server_logs.append(
+                    f"✅ [TERMINÉ] Inférence complète. Temps FHE cumulé: {total_fhe_time:.2f}s"
+                )
+                st.session_state.messages.append({"role": "assistant", "content": full_response})
+
+    # =============================================
+    # MÉTHODES DE SIMULATION (MOAI / HE-SecureNet)
+    # =============================================
+    elif choix_methode == "MOAI":
+        with col_server:
+            with st.spinner("Exécution de l'algorithme MOAI..."):
+                time.sleep(1.5)
+                st.session_state.server_logs.append(
+                    f"> REÇU VIA MOAI (Durée: 1.5s)\n"
+                    f"> Spécificité : Optimisation du packing (En développement)\n"
+                    f"> Ciphertext : [0xA1B2C3_MOAI_SIMULATION...]"
+                )
+        with col_user:
+            with st.chat_message("assistant"):
+                reponse = f"**Analyse FHE terminée via MOAI !**\n\nLe serveur a traité vos données à l'aveugle. (Simulation - En développement)"
                 st.markdown(reponse)
-                
-        st.session_state.messages.append({"role": "assistant", "content": reponse})
+            st.session_state.messages.append({"role": "assistant", "content": reponse})
+
+    elif choix_methode == "HE-SecureNet":
+        with col_server:
+            with st.spinner("Exécution de l'algorithme HE-SecureNet..."):
+                time.sleep(3)
+                st.session_state.server_logs.append(
+                    f"> REÇU VIA HE-SECURENET (Durée: 3.2s)\n"
+                    f"> Spécificité : Réseau sécurisé spécifique (En développement)\n"
+                    f"> Ciphertext : [0x9F8E7D_SECURENET_SIMULATION...]"
+                )
+        with col_user:
+            with st.chat_message("assistant"):
+                reponse = f"**Analyse FHE terminée via HE-SecureNet !**\n\nLe serveur a traité vos données à l'aveugle. (Simulation - En développement)"
+                st.markdown(reponse)
+            st.session_state.messages.append({"role": "assistant", "content": reponse})
