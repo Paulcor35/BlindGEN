@@ -1,0 +1,29 @@
+# Configuration MOAI Universal Benchmarking
+# Définit les bornes de clamping optimales par modèle ou famille
+
+# Valeurs par défaut si le modèle n'est pas répertorié
+default:
+  a_bound: -10.0
+  b_bound: 10.0
+
+# Modèles spécifiques
+models:
+  "gpt2":
+    a_bound: -10.0
+    b_bound: 10.0
+    
+  "stabilityai/stablelm-3b-4e1t":
+    a_bound: -2.0
+    b_bound: 2.0
+    
+  "microsoft/Phi-3-mini-4k-instruct":
+    a_bound: -4.0
+    b_bound: 4.0
+    
+  "Qwen/Qwen2.5-0.5B":
+    a_bound: -4.0
+    b_bound: 4.0
+
+  "Qwen/Qwen2.5-1.5B":
+    a_bound: -4.0
+    b_bound: 4.0
