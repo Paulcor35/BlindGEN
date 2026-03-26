@@ -71,9 +71,43 @@ class MOAIRMSNorm(nn.Module):
             return (output * self.weight.float()).type_as(x)
 
 
-# ─────────────────────────────────────────────
-# 2. Pipeline 100% CKKS (MOAI Paper Implementation)
-# ─────────────────────────────────────────────
+class MoaiPolyActivation(nn.Module):
+    def __init__(self, mode="GELU", a_bound=-10.0, b_bound=10.0, degree=23):
+        super().__init__()
+        self.mode = mode
+        self.a_bound, self.b_bound = a_bound, b_bound
+        if mode == "GELU":
+            self.coeffs = MOAIPaperCKKS.compute_gelu_minimax_poly_coeffs(degree=degree, a=a_bound, b=b_bound)
+        else:
+            self.coeffs = MOAIPaperCKKS.compute_sigmoid_poly_coeffs(degree=degree, a=a_bound, b=b_bound)
+        self.coeffs_horner = list(reversed(self.coeffs))
+
+    def forward(self, h):
+        x = 0.7978845608 * (h + 0.044715 * (h ** 3)) if self.mode == "GELU" else h
+        x_clamped = torch.clamp(x, self.a_bound, self.b_bound)
+        p_res = torch.full_like(x_clamped, self.coeffs_horner[0])
+        for i in range(1, len(self.coeffs_horner)):
+            p_res = p_res * x_clamped + self.coeffs_horner[i]
+        return 0.5 * h * (1.0 + p_res) if self.mode == "GELU" else h * p_res
+
+def inject_moai_engine(model, model_id, config):
+    bounds = config.get("models", {}).get(model_id, config.get("default", {}))
+    a_b, b_b = bounds.get("a_bound", -10.0), bounds.get("b_bound", 10.0)
+    print(f"[MOAI] Simulation FHE : Intervalle [{a_b}, {b_b}]")
+
+    for name, module in list(model.named_modules()):
+        mod_name = module.__class__.__name__.upper()
+        mode = "GELU" if "GELU" in mod_name else "SILU" if "SILU" in mod_name else None
+        if mode:
+            parent = model.get_submodule(name.rsplit('.', 1)[0]) if '.' in name else model
+            setattr(parent, name.rsplit('.', 1)[-1], MoaiPolyActivation(mode, a_b, b_b))
+        if isinstance(module, nn.LayerNorm):
+            moai_ln = MOAILayerNorm(module.normalized_shape, eps=module.eps)
+            moai_ln.weight.data, moai_ln.bias.data = module.weight.data.clone(), module.bias.data.clone()
+            parent = model.get_submodule(name.rsplit('.', 1)[0]) if '.' in name else model
+            setattr(parent, name.rsplit('.', 1)[-1], moai_ln)
+    return model
+
 class MOAIPaperCKKS:
     """
     Implémentation fidèle du pipeline FHE de l'architecture MOAI

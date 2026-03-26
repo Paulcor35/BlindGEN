@@ -1,0 +1,10 @@
+^C:\USERS\WILLI\DOCUMENTS\ISEN\M2\PROJET START UP\BLINDGEN\COMPACT_METHOD\COMPACT_SEAL\CMAKELISTS.TXT
+setlocal
+"C:\Program Files\Microsoft Visual Studio\2022\Community\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" "-SC:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal" "-BC:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build" --check-stamp-file "C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build/CMakeFiles/generate.stamp"
+if %errorlevel% neq 0 goto :cmEnd
+:cmEnd
+endlocal & call :cmErrorLevel %errorlevel% & goto :cmDone
+:cmErrorLevel
+exit /b %1
+:cmDone
+if %errorlevel% neq 0 goto :VCEnd

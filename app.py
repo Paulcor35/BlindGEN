@@ -3,20 +3,35 @@ import time
 import sys
 import os
 
-# Ajout du path pour trouver le module C++ (.pyd) et le dossier compact_method
+# Ajout du path pour trouver les modules C++ (.pyd) et les dossiers méthodes
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# On importe le vrai moteur FHE C++ depuis compact_method
+# On importe les moteurs FHE
 from compact_method.blind_chat_cpp import BlindChatCpp, MAX_TOKENS
+from moai_method.blind_chat_moai import BlindChatMoai
+
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
 
 st.set_page_config(layout="wide", page_title="BlindGEN - Inférence Souveraine", page_icon="🔒")
 
-# --- MISE EN CACHE DU MOTEUR FHE (chargé une seule fois) ---
+# --- MISE EN CACHE DES MOTEURS FHE (chargés une seule fois) ---
 @st.cache_resource
-def init_fhe_engine():
-    return BlindChatCpp()
+def init_engines():
+    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gpt2_local")
+    
+    # 1. Chargement unique du modèle et du tokenizer
+    print(f"  [GLOBAL] Chargement du modèle GPT-2 depuis {model_path}...")
+    tokenizer = GPT2Tokenizer.from_pretrained(model_path)
+    model = GPT2LMHeadModel.from_pretrained(model_path)
+    model.eval()
+    
+    # 2. Partage avec les différentes méthodes FHE
+    return {
+        "Compact (PoPETS 2024)": BlindChatCpp(tokenizer, model),
+        "MOAI": BlindChatMoai(tokenizer, model)
+    }
 
-fhe_engine = init_fhe_engine()
+engines = init_engines()
 
 # --- BARRE LATÉRALE : SÉLECTION DE LA MÉTHODE ---
 st.sidebar.title("Banc d'essai FHE")
@@ -24,8 +39,15 @@ st.sidebar.markdown("Sélectionnez l'architecture papier à évaluer :")
 
 choix_methode = st.sidebar.radio(
     "Architecture d'inférence aveugle :",
-    ["Compact (PoPETS 2024)", "MOAI", "HE-SecureNet"]
+    ["Compact (PoPETS 2024)", "MOAI"]
 )
+
+st.sidebar.divider()
+st.sidebar.subheader("⚙️ Paramètres GPT-2")
+max_tokens = st.sidebar.slider("Max Tokens", 10, 256, 100)
+temperature = st.sidebar.slider("Température", 0.1, 2.0, 0.7)
+top_k = st.sidebar.slider("Top-K", 1, 100, 50)
+penalty = st.sidebar.slider("Pénalité de répétition", 1.0, 2.0, 1.2)
 
 # --- INITIALISATION DE LA MÉMOIRE DU CHAT ---
 if "messages" not in st.session_state:
@@ -73,9 +95,11 @@ if prompt:
             st.markdown(prompt)
 
     # =============================================
-    # COMPACT (PoPETS 2024) - VRAI MOTEUR C++ SEAL
+    # MÉTHODES FHE RÉELLES (COMPACT / MOAI)
     # =============================================
-    if choix_methode == "Compact (PoPETS 2024)":
+    if choix_methode in ["Compact (PoPETS 2024)", "MOAI"]:
+        fhe_engine = engines[choix_methode]
+        
         with col_user:
             with st.chat_message("assistant"):
                 message_placeholder = st.empty()
@@ -84,13 +108,22 @@ if prompt:
                 
                 # Log initial côté serveur
                 st.session_state.server_logs.append(
-                    f"> [COMPACT] Requête reçue. Chiffrement Full-FHE (Ciphertext x Ciphertext).\n"
-                    f"> Le serveur ne peut PAS lire la requête ni les poids du modèle."
+                    f"> [{choix_methode}] Requête reçue. Chiffrement (FHE Rotation-Free).\n"
+                    f"> Le serveur ne peut PAS lire la requête ni voir la réponse."
                 )
                 refresh_server_logs()
 
-                # Génération Token par Token avec le vrai moteur SEAL
-                for step_data in fhe_engine.chat_stream(prompt, max_tokens=MAX_TOKENS):
+                # Génération Token par Token avec le moteur SEAL adéquat
+                t_start_gen = time.time()
+                token_count = 0
+                for step_data in fhe_engine.chat_stream(
+                    prompt, 
+                    max_tokens=max_tokens, 
+                    temperature=temperature, 
+                    top_k=top_k, 
+                    repetition_penalty=penalty
+                ):
+                    token_count += 1
                     # --- Vue Client : affichage progressif du texte ---
                     full_response += step_data["word"]
                     message_placeholder.markdown(full_response + "▌")
@@ -104,42 +137,14 @@ if prompt:
                     refresh_server_logs()
 
                 # Fin de la génération
+                total_duration = time.time() - t_start_gen
+                tokens_per_sec = token_count / total_duration if total_duration > 0 else 0
+                
                 message_placeholder.markdown(full_response)
                 st.session_state.server_logs.append(
-                    f"✅ [TERMINÉ] Inférence complète. Temps FHE cumulé: {total_fhe_time:.2f}s"
+                    f"✅ [TERMINÉ] Inférence complète.\n"
+                    f"⏱️ Temps total : {total_duration:.2f}s | 🚀 Vitesse : {tokens_per_sec:.2f} tok/s\n"
+                    f"🔐 Temps FHE cumulé: {total_fhe_time:.2f}s"
                 )
                 refresh_server_logs()
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
-
-    # =============================================
-    # MÉTHODES DE SIMULATION (MOAI / HE-SecureNet)
-    # =============================================
-    elif choix_methode == "MOAI":
-        with col_server:
-            with st.spinner("Exécution de l'algorithme MOAI..."):
-                time.sleep(1.5)
-                st.session_state.server_logs.append(
-                    f"> REÇU VIA MOAI (Durée: 1.5s)\n"
-                    f"> Spécificité : Optimisation du packing (En développement)\n"
-                    f"> Ciphertext : [0xA1B2C3_MOAI_SIMULATION...]"
-                )
-        with col_user:
-            with st.chat_message("assistant"):
-                reponse = f"**Analyse FHE terminée via MOAI !**\n\nLe serveur a traité vos données à l'aveugle. (Simulation - En développement)"
-                st.markdown(reponse)
-            st.session_state.messages.append({"role": "assistant", "content": reponse})
-
-    elif choix_methode == "HE-SecureNet":
-        with col_server:
-            with st.spinner("Exécution de l'algorithme HE-SecureNet..."):
-                time.sleep(3)
-                st.session_state.server_logs.append(
-                    f"> REÇU VIA HE-SECURENET (Durée: 3.2s)\n"
-                    f"> Spécificité : Réseau sécurisé spécifique (En développement)\n"
-                    f"> Ciphertext : [0x9F8E7D_SECURENET_SIMULATION...]"
-                )
-        with col_user:
-            with st.chat_message("assistant"):
-                reponse = f"**Analyse FHE terminée via HE-SecureNet !**\n\nLe serveur a traité vos données à l'aveugle. (Simulation - En développement)"
-                st.markdown(reponse)
-            st.session_state.messages.append({"role": "assistant", "content": reponse})

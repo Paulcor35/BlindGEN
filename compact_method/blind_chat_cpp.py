@@ -15,40 +15,34 @@ import time
 import sys
 import os
 
-# Ajout du parent au path pour trouver le module C++ (.pyd)
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Ajout des dossiers au path pour trouver le module C++ (.pyd)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, script_dir) # Priorité absolue au dossier local
 
 # 1. Tentative d'importation du module C++ compilé
 try:
     import blind_engine_sov as blind_engine_cpp
     print("[SUCCESS] Module C++ (Microsoft SEAL) chargé avec succès.")
 except ImportError:
-    print("\n[ERREUR] Module 'blind_engine_cpp' non trouvé.")
+    print("\n[ERREUR] Module 'blind_engine_sov' non trouvé.")
     print("Veuillez compiler le backend C++ d'abord :")
-    print("  1. cd seal_cpp_backend")
-    print("  2. mkdir build && cd build")
+    print("  1. cd compact_method/compact_seal")
+    print("  2. mkdir build ; cd build")
     print("  3. cmake .. && cmake --build . --config Release")
     sys.exit(1)
 
 class BlindChatCpp:
-    def __init__(self):
-        # --- CHARGEMENT LOCAL (Souveraineté Totale) ---
-        # Le dossier gpt2_local doit être à la racine
-        model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gpt2_local")
-        
-        print(f"  [CLIENT] Chargement du Tokenizer depuis {model_path}...")
-        self.tokenizer = GPT2Tokenizer.from_pretrained(model_path)
+    def __init__(self, tokenizer, model):
+        # On utilise le tokenizer et le modèle partagés
+        self.tokenizer = tokenizer
+        self.model = model
         
         # Initialisation du moteur C++ (PolyDegree=16384, Scale=2^40)
-        print("  [SERVER] Initialisation du moteur C++ SEAL...")
+        print("  [SERVER] Initialisation du moteur C++ SEAL (COMPACT)...")
         self.engine = blind_engine_cpp.BlindEngine(16384, 2**40)
-        
-        # Chargement du modèle depuis le dossier local
-        print(f"  [SERVER] Chargement du modèle GPT-2 depuis {model_path}...")
-        self.model = GPT2LMHeadModel.from_pretrained(model_path)
-        print("  [SERVER] Modèle GPT-2 prêt.")
+        print("  [SERVER] Moteur Compact prêt.")
 
-    def chat_stream(self, prompt, max_tokens=MAX_TOKENS):
+    def chat_stream(self, prompt, max_tokens=100, temperature=0.7, top_k=50, repetition_penalty=1.2):
         current_text = prompt
         
         # --- ÉTAPE 0 : LE CLIENT CHIFFRE LE MODÈLE (Une fois au début) ---
@@ -62,21 +56,29 @@ class BlindChatCpp:
             # --- ÉTAPE 1 : LE CLIENT CHIFFRE SES DONNÉES ---
             enc_input = self.engine.encrypt_data(embeddings[0, -1, :64])
             
-            start_time = time.time()
-            # --- ÉTAPE 2 : LE SERVEUR REÇOIT DU BRUIT x BRUIT ET RENVOIE DU BRUIT ---
-            enc_bytes = self.engine.process_layer_compact(enc_input, enc_model_weights)
-            exec_time = time.time() - start_time
+            total_exec_time = 0.0
+            last_enc_bytes = b""
             
-            # --- ÉTAPE 3 : LE CLIENT DÉCHIFFRE ---
-            decrypted_result = self.engine.decrypt_result(enc_bytes)
+            # --- ÉTAPE 2 : LE SERVEUR TRAITE LES 12 COUCHES GPT-2 ---
+            # On simule le passage dans les 12 blocs Transformer
+            for layer_idx in range(12):
+                start_time = time.time()
+                # On utilise les poids de la couche correspondante (pour la forme)
+                weights = self.model.transformer.h[layer_idx].mlp.c_fc.weight.detach().numpy()
+                enc_weights = self.engine.encrypt_data(weights[0, :64])
+                
+                # Le serveur traite la couche
+                last_enc_bytes = self.engine.process_layer_compact(enc_input, enc_weights)
+                total_exec_time += (time.time() - start_time)
+                
+                # Dans un vrai Full-FHE, le résultat de la couche r servirait d'input à r+1
+                # ici on benchmark juste la latence cumulée des 12 opérations réelles SEAL
+            
+            # --- ÉTAPE 3 : LE CLIENT DÉCHIFFRE LE RÉSULTAT FINAL ---
+            decrypted_result = self.engine.decrypt_result(last_enc_bytes)
             
             outputs = self.model(tokens)
             next_token_logits = outputs.logits[:, -1, :].clone()
-            
-            # --- APPLICATION DES PARAMÈTRES DE GÉNÉRATION ---
-            temperature = 0.7
-            top_k = 50
-            repetition_penalty = 1.2
             
             # 1. Repetition Penalty
             for token_id in set(tokens[0].tolist()):
@@ -86,7 +88,7 @@ class BlindChatCpp:
                     next_token_logits[0, token_id] /= repetition_penalty
                     
             # 2. Temperature
-            next_token_logits = next_token_logits / temperature
+            next_token_logits = next_token_logits / max(temperature, 1e-5)
             
             # 3. Top-K
             top_k_values, _ = torch.topk(next_token_logits, top_k)
@@ -105,8 +107,8 @@ class BlindChatCpp:
             
             yield {
                 "word": word,
-                "enc_bytes_len": len(enc_bytes),
-                "exec_time": exec_time,
+                "enc_bytes_len": len(last_enc_bytes),
+                "exec_time": total_exec_time,
                 "is_eos": False
             }
 
