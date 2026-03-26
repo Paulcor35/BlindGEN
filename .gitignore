@@ -3,3 +3,7 @@
 CMakeCache.txt
 */__pycache__/*
 gpt2_local
+gpt2_moai
+/moai_method/moai_seal/build
+*.pyd
+*.exe
