@@ -32,15 +32,20 @@ except ImportError:
 
 class BlindChatCpp:
     def __init__(self):
-        print("  [CLIENT] Chargement du Tokenizer...")
-        self.tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+        # --- CHARGEMENT LOCAL (Souveraineté Totale) ---
+        # Le dossier gpt2_local doit être à la racine
+        model_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gpt2_local")
+        
+        print(f"  [CLIENT] Chargement du Tokenizer depuis {model_path}...")
+        self.tokenizer = GPT2Tokenizer.from_pretrained(model_path)
         
         # Initialisation du moteur C++ (PolyDegree=16384, Scale=2^40)
         print("  [SERVER] Initialisation du moteur C++ SEAL...")
         self.engine = blind_engine_cpp.BlindEngine(16384, 2**40)
         
-        # Chargement du modèle pour extraire les poids vers le C++
-        self.model = GPT2LMHeadModel.from_pretrained('gpt2')
+        # Chargement du modèle depuis le dossier local
+        print(f"  [SERVER] Chargement du modèle GPT-2 depuis {model_path}...")
+        self.model = GPT2LMHeadModel.from_pretrained(model_path)
         print("  [SERVER] Modèle GPT-2 prêt.")
 
     def chat_stream(self, prompt, max_tokens=MAX_TOKENS):
