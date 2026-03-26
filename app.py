@@ -97,7 +97,7 @@ if prompt:
     # =============================================
     # MÉTHODES FHE RÉELLES (COMPACT / MOAI)
     # =============================================
-    if choix_methode in ["Compact (PoPETS 2024)", "MOAI"]:
+    if choix_methode in ["Compact", "MOAI"]:
         fhe_engine = engines[choix_methode]
         
         with col_user:
