@@ -11,7 +11,7 @@
 
   <PropertyGroup>
     <PlatformTarget>x64</PlatformTarget>
-    <OutputPath>C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build/SEAL/bin/dotnet/$(Configuration)</OutputPath>
+    <OutputPath>E:/Projets/BlindGEN/compact_method/compact_seal/build/SEAL/bin/dotnet/$(Configuration)</OutputPath>
   </PropertyGroup>
 
   <ItemGroup>
@@ -25,9 +25,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <SEALCBinaryFiles Condition="$([MSBuild]::IsOsPlatform(Windows))" Include="C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build/SEAL/bin/Release\sealc.dll" />
-    <SEALCBinaryFiles Condition="$([MSBuild]::IsOsPlatform(Linux))" Include="C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build/SEAL/lib/libsealc.so*" />
-    <SEALCBinaryFiles Condition="$([MSBuild]::IsOsPlatform(OSX))" Include="C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build/SEAL/lib/libsealc*.dylib" />
+    <SEALCBinaryFiles Condition="$([MSBuild]::IsOsPlatform(Windows))" Include="E:/Projets/BlindGEN/compact_method/compact_seal/build/SEAL/bin/Release\sealc.dll" />
+    <SEALCBinaryFiles Condition="$([MSBuild]::IsOsPlatform(Linux))" Include="E:/Projets/BlindGEN/compact_method/compact_seal/build/SEAL/lib/libsealc.so*" />
+    <SEALCBinaryFiles Condition="$([MSBuild]::IsOsPlatform(OSX))" Include="E:/Projets/BlindGEN/compact_method/compact_seal/build/SEAL/lib/libsealc*.dylib" />
   </ItemGroup>
 
   <Target Name="PostBuild" AfterTargets="PostBuildEvent">
@@ -35,6 +35,6 @@
   </Target>
 
   <ItemGroup>
-    <Compile Include="C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/SEAL\dotnet\tests\**\*.cs" />
+    <Compile Include="E:/Projets/BlindGEN/SEAL\dotnet\tests\**\*.cs" />
   </ItemGroup>
 </Project>

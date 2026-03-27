@@ -2,149 +2,249 @@ import streamlit as st
 import time
 import sys
 import os
+import torch
+import base64
+import random
+import string
+import textwrap
+from huggingface_hub import scan_cache_dir
 
 # Ajout du path pour trouver les modules C++ (.pyd) et les dossiers méthodes
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # On importe les moteurs FHE
-from compact_method.blind_chat_cpp import BlindChatCpp, MAX_TOKENS
+from compact_method.blind_chat_cpp import BlindChatCpp
 from moai_method.blind_chat_moai import BlindChatMoai
 
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
+from transformers import AutoTokenizer, AutoModelForCausalLM, AutoConfig
 
 st.set_page_config(layout="wide", page_title="BlindGEN - Inférence Souveraine", page_icon="🔒")
 
-# --- MISE EN CACHE DES MOTEURS FHE (chargés une seule fois) ---
-@st.cache_resource
-def init_engines():
-    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gpt2_local")
-    
-    # 1. Chargement unique du modèle et du tokenizer
-    print(f"  [GLOBAL] Chargement du modèle GPT-2 depuis {model_path}...")
-    tokenizer = GPT2Tokenizer.from_pretrained(model_path)
-    model = GPT2LMHeadModel.from_pretrained(model_path)
-    model.eval()
-    
-    # 2. Partage avec les différentes méthodes FHE
-    return {
-        "Compact (PoPETS 2024)": BlindChatCpp(tokenizer, model),
-        "MOAI": BlindChatMoai(tokenizer, model)
-    }
-
-engines = init_engines()
-
-# --- BARRE LATÉRALE : SÉLECTION DE LA MÉTHODE ---
-st.sidebar.title("Banc d'essai FHE")
-st.sidebar.markdown("Sélectionnez l'architecture papier à évaluer :")
-
-choix_methode = st.sidebar.radio(
-    "Architecture d'inférence aveugle :",
-    ["Compact (PoPETS 2024)", "MOAI"]
-)
-
-st.sidebar.divider()
-st.sidebar.subheader("⚙️ Paramètres GPT-2")
-max_tokens = st.sidebar.slider("Max Tokens", 10, 256, 100)
-temperature = st.sidebar.slider("Température", 0.1, 2.0, 0.7)
-top_k = st.sidebar.slider("Top-K", 1, 100, 50)
-penalty = st.sidebar.slider("Pénalité de répétition", 1.0, 2.0, 1.2)
-
-# --- INITIALISATION DE LA MÉMOIRE DU CHAT ---
+# --- INITIALISATION DE L'ÉTAT ---
+if "generating" not in st.session_state:
+    st.session_state.generating = False
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "server_logs" not in st.session_state:
     st.session_state.server_logs = []
+if "pending_prompt" not in st.session_state:
+    st.session_state.pending_prompt = None
+if "current_fhe_time" not in st.session_state:
+    st.session_state.current_fhe_time = 0.0
+if "encrypted_buffer" not in st.session_state:
+    st.session_state.encrypted_buffer = ""
+
+# Persistance des dernières métriques
+if "last_metrics" not in st.session_state:
+    st.session_state.last_metrics = {"tps": 0.0, "fhe_t": 0.0, "p_kb": 0.0, "total_t": 0.0}
+
+# --- HELPERS ---
+def wrap_b64(b64_str, width=64):
+    """Coupe proprement les longues chaines Base64 pour l'affichage."""
+    if not b64_str: return ""
+    return "\n".join(textwrap.wrap(b64_str, width))
+
+# --- DETECTION AUTOMATIQUE DES LLM LOCAUX ---
+def get_local_llms():
+    llms = []
+    if os.path.isdir("gpt2_local"):
+        llms.append("gpt2_local (Local)")
+    try:
+        cache_info = scan_cache_dir()
+        for repo in cache_info.repos:
+            if repo.repo_type == "model":
+                repo_id = repo.repo_id
+                try:
+                    config = AutoConfig.from_pretrained(repo_id, local_files_only=True)
+                    archs = getattr(config, "architectures", [])
+                    if any("CausalLM" in a or "GPT" in a or "ForLM" in a or "Llama" in a or "Qwen" in a for a in archs):
+                        llms.append(repo_id)
+                except Exception: pass
+    except Exception: pass
+    llms = sorted(list(set(llms)))
+    llms.append("--- Saisie Manuelle ---")
+    return llms
+
+@st.cache_resource
+def load_engine(model_id, method, poly_n, scale_pow):
+    path_to_load = "gpt2_local" if model_id == "gpt2_local (Local)" else model_id
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(path_to_load)
+        model = AutoModelForCausalLM.from_pretrained(path_to_load)
+        model.eval()
+        h_size = model.config.hidden_size if hasattr(model.config, "hidden_size") else model.config.n_embd
+        if method == "MOAI":
+            engine = BlindChatMoai(tokenizer, model, poly_n=poly_n, scale_bits=scale_pow)
+        else:
+            engine = BlindChatCpp(tokenizer, model, poly_n=poly_n, scale_bits=scale_pow)
+        return engine, h_size
+    except Exception as e:
+        st.error(f"Erreur d'initialisation : {e}")
+        return None, None
+
+# --- BARRE LATÉRALE ---
+st.sidebar.title("Banc d'essai FHE")
+
+# 1. Sélection du modèle
+model_list = get_local_llms()
+choix_model = st.sidebar.selectbox("Sélectionnez le LLM :", model_list, index=0)
+if choix_model == "--- Saisie Manuelle ---":
+    choix_model = st.sidebar.text_input("Identifiant Hugging Face :")
+
+# 2. Sélection de l'architecture
+choix_methode = st.sidebar.radio("Architecture d'inférence aveugle :", ["Compact (PoPETS 2024)", "MOAI"], index=1)
+
+st.sidebar.divider()
+
+# 3. Paramètres FHE (N et Scale)
+st.sidebar.subheader("Configuration SEAL")
+fhe_profiles = {
+    "Vitesse (8192)": (8192, 30),
+    "Industriel (16384)": (16384, 40),
+    "Sécurité Max (32768)": (32768, 50)
+}
+profil_selection = st.sidebar.select_slider(
+    "Profil de chiffrement (N / Scale) :",
+    options=list(fhe_profiles.keys()),
+    value="Industriel (16384)",
+    help="Définit le compromis entre sécurité et vitesse. Un degré (N) élevé permet des calculs plus profonds mais est beaucoup plus lent."
+)
+poly_n_val, scale_bits_val = fhe_profiles[profil_selection]
+
+engine, h_size = None, None
+if choix_model and choix_model != "--- Saisie Manuelle ---":
+    engine, h_size = load_engine(choix_model, choix_methode, poly_n_val, scale_bits_val)
+
+st.sidebar.divider()
+
+# 4. Largeur FHE en pourcentage
+if h_size:
+    fhe_percent = st.sidebar.slider(
+        "Largeur FHE (%) :", 1, 100, 33,
+        help="Plus ce pourcentage est faible, plus le calcul est rapide, mais plus le modèle perd en précision (les neurones 'aveugles' sont ignorés)."
+    )
+    fhe_slice_abs = int((fhe_percent / 100.0) * h_size)
+    fhe_slice_abs = max(1, min(fhe_slice_abs, h_size))
+    st.sidebar.write(f"Dimension réelle : **{fhe_slice_abs}** / {h_size} neurones")
+else:
+    fhe_slice_abs = 128
+
+st.sidebar.divider()
+
+# 5. Paramètres de génération
+st.sidebar.subheader("Paramètres")
+max_tokens = st.sidebar.number_input("Max Tokens", min_value=1, max_value=1000, value=25)
+temperature = st.sidebar.number_input("Température", min_value=0.01, max_value=5.0, value=0.70, step=0.05)
 
 # --- INTERFACE PRINCIPALE ---
 st.title("Inférence Sécurisée - Benchmark des Architectures")
-st.markdown("Démonstration en direct du traitement d'embeddings chiffrés via Microsoft SEAL (C++).")
-st.divider()
-
 col_user, col_server = st.columns(2)
 
-# --- COLONNE GAUCHE : CLIENT ---
-with col_user:
-    st.subheader("👤 Vue Client (Local)")
-    for msg in st.session_state.messages:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            
-    prompt = st.chat_input("Envoyer un texte à analyser en toute sécurité...")
-
-# --- COLONNE DROITE : SERVEUR ---
 with col_server:
-    st.subheader("🖥️ Vue Serveur (Cloud)")
-    st.info("Ce que le serveur intercepte et manipule (Totalement chiffré).")
+    st.subheader("Vue Serveur (Cloud)")
     server_placeholder = st.empty()
 
-# Fonction pour rafraîchir les logs serveur en temps réel
-def refresh_server_logs():
-    with server_placeholder.container(height=500):
+def refresh_server_view():
+    with server_placeholder.container(height=520):
         for log in st.session_state.server_logs:
             st.text(log)
+        if st.session_state.encrypted_buffer:
+            st.markdown("**Interception Server (Ciphertexts) :**")
+            st.code(wrap_b64(st.session_state.encrypted_buffer), language="text")
 
-# Rendu initial des logs existants
-refresh_server_logs()
+with col_user:
+    st.subheader("Vue Client (Local)")
+    chat_container = st.container()
+    
+    with chat_container:
+        for msg in st.session_state.messages:
+            with st.chat_message(msg["role"]):
+                st.markdown(msg["content"])
+    
+    # Zone d'input
+    input_zone = st.container()
+    with input_zone:
+        if not st.session_state.generating:
+            raw_prompt = st.chat_input("Envoyer un texte à analyser en toute sécurité...")
+            if raw_prompt:
+                st.session_state.pending_prompt = raw_prompt
+                st.session_state.generating = True
+                st.session_state.current_fhe_time = 0.0
+                st.session_state.encrypted_buffer = ""
+                st.rerun()
+        else:
+            st.markdown("---")
+            c1, c2 = st.columns([9, 1])
+            with c1: st.info("🔄 Inférence FHE en cours...")
+            with c2: 
+                if st.button("⏹️", use_container_width=True):
+                    st.session_state.generating = False
+                    st.rerun()
+    
+    # Zone des métriques persitante
+    metrics_placeholder = st.empty()
 
-# --- LOGIQUE D'EXÉCUTION LORS DE L'ENVOI ---
-if prompt:
-    # 1. Affichage immédiat du message utilisateur
+def render_metrics(tps=None, fhe_t=None, p_kb=None, total_t=None):
+    if tps is None: tps = st.session_state.last_metrics["tps"]
+    if fhe_t is None: fhe_t = st.session_state.last_metrics["fhe_t"]
+    if p_kb is None: p_kb = st.session_state.last_metrics["p_kb"]
+    if total_t is None: total_t = st.session_state.last_metrics["total_t"]
+    
+    st.session_state.last_metrics = {"tps": tps, "fhe_t": fhe_t, "p_kb": p_kb, "total_t": total_t}
+    
+    with metrics_placeholder.container():
+        r1_c1, r1_c2 = st.columns(2)
+        r2_c1, r2_c2 = st.columns(2)
+        r1_c1.metric("Vitesse", f"{tps:.2f} tok/s")
+        r1_c2.metric("Temps FHE", f"{fhe_t:.2f}s")
+        r2_c1.metric("Paquet", f"{p_kb:.1f} KB")
+        r2_c2.metric("Durée totale", f"{total_t:.2f}s")
+
+render_metrics()
+refresh_server_view()
+
+# --- LOGIQUE D'EXÉCUTION ---
+if st.session_state.generating and st.session_state.pending_prompt and engine:
+    prompt = st.session_state.pending_prompt
+    st.session_state.pending_prompt = None
     st.session_state.messages.append({"role": "user", "content": prompt})
-    with col_user:
+    
+    with chat_container:
         with st.chat_message("user"):
             st.markdown(prompt)
 
-    # =============================================
-    # MÉTHODES FHE RÉELLES (COMPACT / MOAI)
-    # =============================================
-    if choix_methode in ["Compact", "MOAI"]:
-        fhe_engine = engines[choix_methode]
-        
-        with col_user:
-            with st.chat_message("assistant"):
-                message_placeholder = st.empty()
-                full_response = ""
-                total_fhe_time = 0.0
-                
-                # Log initial côté serveur
-                st.session_state.server_logs.append(
-                    f"> [{choix_methode}] Requête reçue. Chiffrement (FHE Rotation-Free).\n"
-                    f"> Le serveur ne peut PAS lire la requête ni voir la réponse."
-                )
-                refresh_server_logs()
-
-                # Génération Token par Token avec le moteur SEAL adéquat
-                t_start_gen = time.time()
-                token_count = 0
-                for step_data in fhe_engine.chat_stream(
-                    prompt, 
-                    max_tokens=max_tokens, 
-                    temperature=temperature, 
-                    top_k=top_k, 
-                    repetition_penalty=penalty
-                ):
+    with chat_container:
+        with st.chat_message("assistant"):
+            message_placeholder = st.empty()
+            full_response = ""
+            st.session_state.server_logs.append(f"> [{choix_methode}] Requête FHE. Profil: {profil_selection}")
+            refresh_server_view()
+            
+            t_start_gen = time.time()
+            token_count = 0
+            
+            try:
+                for step_data in engine.chat_stream(prompt, max_tokens=max_tokens, temperature=temperature, fhe_slice=fhe_slice_abs):
                     token_count += 1
-                    # --- Vue Client : affichage progressif du texte ---
                     full_response += step_data["word"]
                     message_placeholder.markdown(full_response + "▌")
                     
-                    # --- Vue Serveur : log de chaque opération aveugle ---
-                    total_fhe_time += step_data["exec_time"]
-                    st.session_state.server_logs.append(
-                        f"⚙️ [OPÉRATION AVEUGLE] {step_data['enc_bytes_len']} octets chiffrés traités | "
-                        f"Temps FHE: {step_data['exec_time']*1000:.1f}ms"
-                    )
-                    refresh_server_logs()
+                    st.session_state.current_fhe_time += step_data["exec_time"]
+                    
+                    real_noise = step_data.get("ciphertext_b64", "")
+                    st.session_state.encrypted_buffer = real_noise
+                    
+                    elapsed = time.time() - t_start_gen
+                    current_tps = token_count / elapsed if elapsed > 0 else 0
+                    current_pkb = step_data['enc_bytes_len'] / 1024
+                    
+                    render_metrics(current_tps, st.session_state.current_fhe_time, current_pkb, elapsed)
+                    refresh_server_view()
 
-                # Fin de la génération
-                total_duration = time.time() - t_start_gen
-                tokens_per_sec = token_count / total_duration if total_duration > 0 else 0
-                
-                message_placeholder.markdown(full_response)
-                st.session_state.server_logs.append(
-                    f"✅ [TERMINÉ] Inférence complète.\n"
-                    f"⏱️ Temps total : {total_duration:.2f}s | 🚀 Vitesse : {tokens_per_sec:.2f} tok/s\n"
-                    f"🔐 Temps FHE cumulé: {total_fhe_time:.2f}s"
-                )
-                refresh_server_logs()
                 st.session_state.messages.append({"role": "assistant", "content": full_response})
+                message_placeholder.markdown(full_response)
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+            finally:
+                st.session_state.generating = False
+                st.rerun()

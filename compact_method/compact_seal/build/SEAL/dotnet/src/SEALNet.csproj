@@ -11,14 +11,14 @@
     <DelaySign Condition="'$(OS)' == 'Windows_NT' And '$(SEALNetSigningCertificate)' != ''">true</DelaySign>
   </PropertyGroup>
   <PropertyGroup>
-    <DocumentationFile>C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build/SEAL/bin\dotnet\$(Configuration)/SEALNet.xml</DocumentationFile>
+    <DocumentationFile>E:/Projets/BlindGEN/compact_method/compact_seal/build/SEAL/bin\dotnet\$(Configuration)/SEALNet.xml</DocumentationFile>
     <PlatformTarget>x64</PlatformTarget>
-    <OutputPath>C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build/SEAL/bin\dotnet\$(Configuration)</OutputPath>
+    <OutputPath>E:/Projets/BlindGEN/compact_method/compact_seal/build/SEAL/bin\dotnet\$(Configuration)</OutputPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(BuildIOS)' != ''">
     <DefineConstants>$(DefineConstants);SEAL_IOS</DefineConstants>
-    <DocumentationFile>C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build/SEAL/bin\dotnet\ios\$(Configuration)\SEALNet.xml</DocumentationFile>
-    <OutputPath>C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/compact_method/compact_seal/build/SEAL/bin\dotnet\ios\$(Configuration)</OutputPath>
+    <DocumentationFile>E:/Projets/BlindGEN/compact_method/compact_seal/build/SEAL/bin\dotnet\ios\$(Configuration)\SEALNet.xml</DocumentationFile>
+    <OutputPath>E:/Projets/BlindGEN/compact_method/compact_seal/build/SEAL/bin\dotnet\ios\$(Configuration)</OutputPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)'=='Release'">
     <DebugType>pdbonly</DebugType>
@@ -29,6 +29,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Include="C:/Users/willi/Documents/ISEN/M2/Projet start up/BlindGEN/SEAL\dotnet\src\**\*.cs" />
+    <Compile Include="E:/Projets/BlindGEN/SEAL\dotnet\src\**\*.cs" />
   </ItemGroup>
 </Project>

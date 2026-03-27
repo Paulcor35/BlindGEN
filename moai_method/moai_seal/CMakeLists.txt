@@ -13,12 +13,16 @@ set(SEAL_USE_ZSTD OFF CACHE BOOL "" FORCE)
 # Chemin vers SEAL (Submodule à la racine)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../../SEAL ${CMAKE_BINARY_DIR}/SEAL)
 
+# Discovery Python 3
+find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
+
 # Discovery pybind11
 execute_process(
-    COMMAND python -m pybind11 --cmakedir
+    COMMAND "${Python3_EXECUTABLE}" -m pybind11 --cmakedir
     OUTPUT_VARIABLE pybind11_DIR
     OUTPUT_STRIP_TRAILING_WHITESPACE
 )
+set(PYBIND11_FINDPYTHON ON)
 find_package(pybind11 CONFIG REQUIRED)
 
 # EXTENSION PYTHON (Pybind11)

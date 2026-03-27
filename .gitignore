@@ -7,3 +7,5 @@ gpt2_moai
 /moai_method/moai_seal/build
 *.pyd
 *.exe
+/seal_cpp_backend/build
+/compact_method/compact_seal/build

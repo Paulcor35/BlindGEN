@@ -1,146 +1,128 @@
-"""
-BlindGEN : Interface Hybride Python/C++ (Expert Mode)
-======================================================
-Ce script utilise le module C++ compilé via PyBind11 pour
-effectuer les calculs Microsoft SEAL à une vitesse maximale.
-"""
-
-# --- CONFIGURATION GLOBALE ---
-MAX_TOKENS = 10000
-
 import torch
 import numpy as np
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
 import time
 import sys
 import os
 
 # Ajout des dossiers au path pour trouver le module C++ (.pyd)
 script_dir = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, script_dir) # Priorité absolue au dossier local
+sys.path.insert(0, script_dir)
 
-# 1. Tentative d'importation du module C++ compilé
 try:
     import blind_engine_sov as blind_engine_cpp
-    print("[SUCCESS] Module C++ (Microsoft SEAL) chargé avec succès.")
 except ImportError:
-    print("\n[ERREUR] Module 'blind_engine_sov' non trouvé.")
-    print("Veuillez compiler le backend C++ d'abord :")
-    print("  1. cd compact_method/compact_seal")
-    print("  2. mkdir build ; cd build")
-    print("  3. cmake .. && cmake --build . --config Release")
-    sys.exit(1)
+    # On ne quitte plus brutalement pour permettre au reste de l'app de tourner si besoin
+    blind_engine_cpp = None
 
 class BlindChatCpp:
-    def __init__(self, tokenizer, model):
-        # On utilise le tokenizer et le modèle partagés
+    def __init__(self, tokenizer, model, poly_n=16384, scale_bits=40):
         self.tokenizer = tokenizer
         self.model = model
         
-        # Initialisation du moteur C++ (PolyDegree=16384, Scale=2^40)
-        print("  [SERVER] Initialisation du moteur C++ SEAL (COMPACT)...")
-        self.engine = blind_engine_cpp.BlindEngine(16384, 2**40)
-        print("  [SERVER] Moteur Compact prêt.")
+        # Initialisation du moteur C++ (PolyDegree et Scale dynamiques)
+        if blind_engine_cpp:
+            print(f"  [SERVER] Initialisation Compact (N={poly_n}, Scale=2^{scale_bits})...")
+            self.engine = blind_engine_cpp.BlindEngine(poly_n, 2**scale_bits)
+            print("  [SERVER] Moteur Compact prêt.")
+        else:
+            self.engine = None
 
-    def chat_stream(self, prompt, max_tokens=100, temperature=0.7, top_k=50, repetition_penalty=1.2):
+    def _find_mlp_layer(self, layer_idx=0):
+        """Trouve dynamiquement la couche MLP pour une couche donnée."""
+        # On essaie de trouver le conteneur de couches (h pour GPT2, layers pour Llama/StableLM)
+        layers = None
+        if hasattr(self.model, "transformer") and hasattr(self.model.transformer, "h"):
+            layers = self.model.transformer.h
+        elif hasattr(self.model, "model") and hasattr(self.model.model, "layers"):
+            layers = self.model.model.layers
+        elif hasattr(self.model, "layers"):
+            layers = self.model.layers
+            
+        if layers is None or layer_idx >= len(layers):
+            return None, 12 # Fallback
+            
+        layer = layers[layer_idx]
+        # Recherche du MLP
+        for name, module in layer.named_modules():
+            if any(cn in name for cn in ["c_fc", "gate_proj", "up_proj", "mlp.fc1"]):
+                return module, len(layers)
+        return None, len(layers)
+
+    def chat_stream(self, prompt, max_tokens=100, temperature=0.7, top_k=50, repetition_penalty=1.2, fhe_slice=256):
+        if not self.engine:
+            yield {"word": "Erreur: Backend C++ non chargé.", "exec_time": 0, "enc_bytes_len": 0}
+            return
+
         current_text = prompt
         
-        # --- ÉTAPE 0 : LE CLIENT CHIFFRE LE MODÈLE (Une fois au début) ---
-        weights = self.model.transformer.h[0].mlp.c_fc.weight.detach().numpy()
-        enc_model_weights = self.engine.encrypt_data(weights[0, :64]) 
+        # Detection de la structure
+        target_mlp, num_layers = self._find_mlp_layer(0)
+        
+        # --- ÉTAPE 0 : LE CLIENT CHIFFRE LE MODÈLE (Simulation benchmarking) ---
+        if target_mlp and hasattr(target_mlp, "weight"):
+            weights = target_mlp.weight.data.detach().cpu().numpy()[:fhe_slice, :fhe_slice]
+            # On simule le chiffrement d'un vecteur de poids
+            _ = self.engine.encrypt_data(weights[0, :fhe_slice].astype(np.float64).tolist()) 
 
         for i in range(max_tokens):
-            tokens = self.tokenizer.encode(current_text, return_tensors='pt')
-            embeddings = self.model.transformer.wte(tokens).detach().numpy()
+            tokens = self.tokenizer.encode(current_text, return_tensors='pt').to(self.model.device)
+            
+            # Embeddings génériques
+            with torch.no_grad():
+                input_embeds = self.model.get_input_embeddings()(tokens)
+                embeddings = input_embeds.detach().cpu().numpy()
             
             # --- ÉTAPE 1 : LE CLIENT CHIFFRE SES DONNÉES ---
-            enc_input = self.engine.encrypt_data(embeddings[0, -1, :64])
+            # On prend le dernier token
+            vec_to_encrypt = embeddings[0, -1, :fhe_slice].astype(np.float64).tolist()
+            enc_input = self.engine.encrypt_data(vec_to_encrypt)
             
             total_exec_time = 0.0
             last_enc_bytes = b""
+            last_ciphertext_b64 = ""
             
-            # --- ÉTAPE 2 : LE SERVEUR TRAITE LES 12 COUCHES GPT-2 ---
-            # On simule le passage dans les 12 blocs Transformer
-            for layer_idx in range(12):
+            # --- ÉTAPE 2 : LE SERVEUR TRAITE LES N COUCHES EN FHE ---
+            for l_idx in range(num_layers):
                 start_time = time.time()
-                # On utilise les poids de la couche correspondante (pour la forme)
-                weights = self.model.transformer.h[layer_idx].mlp.c_fc.weight.detach().numpy()
-                enc_weights = self.engine.encrypt_data(weights[0, :64])
+                # On récupère la matrice pour cette couche
+                layer_mlp, _ = self._find_mlp_layer(l_idx)
                 
-                # Le serveur traite la couche
-                last_enc_bytes = self.engine.process_layer_compact(enc_input, enc_weights)
-                total_exec_time += (time.time() - start_time)
-                
-                # Dans un vrai Full-FHE, le résultat de la couche r servirait d'input à r+1
-                # ici on benchmark juste la latence cumulée des 12 opérations réelles SEAL
-            
-            # --- ÉTAPE 3 : LE CLIENT DÉCHIFFRE LE RÉSULTAT FINAL ---
-            decrypted_result = self.engine.decrypt_result(last_enc_bytes)
-            
-            outputs = self.model(tokens)
-            next_token_logits = outputs.logits[:, -1, :].clone()
-            
-            # 1. Repetition Penalty
-            for token_id in set(tokens[0].tolist()):
-                if next_token_logits[0, token_id] < 0:
-                    next_token_logits[0, token_id] *= repetition_penalty
-                else:
-                    next_token_logits[0, token_id] /= repetition_penalty
+                if layer_mlp and hasattr(layer_mlp, "weight"):
+                    # Extraction et conversion en liste pour le C++
+                    # Note: Compact C++ attend une liste de listes (matrix)
+                    w_mat = layer_mlp.weight.data.detach().cpu().numpy()[:fhe_slice, :fhe_slice].astype(np.float64)
+                    last_enc_bytes = self.engine.process_layer_compact(enc_input, w_mat.tolist())
                     
-            # 2. Temperature
+                    # --- CAPTURE RÉELLE (ZÉRO DUMMY) ---
+                    import base64
+                    if isinstance(last_enc_bytes, bytes):
+                        last_ciphertext_b64 = base64.b64encode(last_enc_bytes[:1024]).decode()
+                    
+                total_exec_time += (time.time() - start_time)
+            
+            # --- ÉTAPE 3 : LE CLIENT DÉCHIFFRE ET ÉCHANTILLONNE ---
+            # (Ici on utilise le modèle réel pour la suite du sampling, comme dans MOAI)
+            with torch.no_grad():
+                outputs = self.model(tokens)
+                next_token_logits = outputs.logits[:, -1, :].clone()
+            
+            # Sampling standard
             next_token_logits = next_token_logits / max(temperature, 1e-5)
+            v, _ = torch.topk(next_token_logits, min(top_k, next_token_logits.size(-1)))
+            next_token_logits[next_token_logits < v[:, [-1]]] = -float('Inf')
             
-            # 3. Top-K
-            top_k_values, _ = torch.topk(next_token_logits, top_k)
-            min_top_k_value = top_k_values[0, -1]
-            next_token_logits[next_token_logits < min_top_k_value] = -float('Inf')
-            
-            # 4. Sampling
             probs = torch.nn.functional.softmax(next_token_logits, dim=-1)
             next_id = torch.multinomial(probs, num_samples=1).item()
             
             if next_id == self.tokenizer.eos_token_id:
                 break
             
-            word = self.tokenizer.decode([next_id])
+            word = self.tokenizer.decode([next_id], skip_special_tokens=True)
             current_text += word
             
             yield {
                 "word": word,
                 "enc_bytes_len": len(last_enc_bytes),
                 "exec_time": total_exec_time,
-                "is_eos": False
+                "ciphertext_b64": last_ciphertext_b64
             }
-
-    def chat(self, prompt):
-        current_text = prompt
-        print(f"  [FULL-FHE] Chiffrement du MODÈLE et du TEXTE...", flush=True)
-        print(f"  [PRÊT] Poids chiffrés envoyés au serveur.")
-        print(f"  [GPT-2 SOUVERAIN] ", end="", flush=True)
-        
-        first = True
-        for step_data in self.chat_stream(prompt, MAX_TOKENS):
-            if first:
-                print(f"\n      [STATUS] Inférence sur données + modèle chiffrés")
-                print(f"      [CLIENT] Réponse reçue ({step_data['enc_bytes_len']} octets)")
-                print(f"  [GPT-2 SOUVERAIN] ", end="", flush=True)
-                first = False
-
-            print(step_data["word"], end="", flush=True)
-            
-        print(" [SOUVERAINETÉ TOTALE]")
-
-def main():
-    print("="*60)
-    print("  BlindGEN : MOTEUR HYBRIDE PYTHON + C++ SEAL")
-    print("="*60)
-    
-    app = BlindChatCpp()
-    
-    while True:
-        text = input("\nEntrez un message (ou 'exit') : ")
-        if text.lower() == 'exit': break
-        app.chat(text)
-
-if __name__ == "__main__":
-    main()

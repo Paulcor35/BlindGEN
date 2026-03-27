@@ -36,8 +36,23 @@ public:
     context = make_shared<SEALContext>(parms);
     evaluator = new Evaluator(*context);
     encoder = new CKKSEncoder(*context);
+
+    // DETERMINATION DYNAMIQUE DE LA SCALE
+    // On s'aligne sur la taille des primes intermédiaires
+    auto &modulus = parms.coeff_modulus();
+    if (modulus.size() > 1) {
+        // Calcul portable de la taille en bits du second prime
+        uint64_t val = modulus[1].value();
+        int bits = 0;
+        while (val > 0) { val >>= 1; bits++; }
+        global_scale = pow(2.0, (double)bits);
+    } else {
+        global_scale = pow(2.0, 30.0);
+    }
   }
   ~MoaiServer() { delete evaluator; delete encoder; }
+
+  void set_scale(double s) { global_scale = s; }
 
   void set_batch_size(int b) { batch_size = b; }
 
@@ -212,19 +227,22 @@ public:
   PublicKey pk;
   double scale = pow(2.0, 30);
 
-  MoaiClient(size_t poly_modulus_degree) {
-    cout << "[DEBUG] MoaiClient context init for N=" << poly_modulus_degree << endl;
+  MoaiClient(size_t poly_mod_deg, int scale_bits = 40) {
+    cout << "[DEBUG] MoaiClient init N=" << poly_mod_deg << " Scale=2^" << scale_bits << endl;
     EncryptionParameters parms(scheme_type::ckks);
-    parms.set_poly_modulus_degree(poly_modulus_degree);
+    parms.set_poly_modulus_degree(poly_mod_deg);
     
-    // On utilise exactement les memes parametres que le moteur Turbo C++
-    if (poly_modulus_degree <= 8192) {
-        parms.set_coeff_modulus(CoeffModulus::Create(poly_modulus_degree, {60, 40, 60}));
-        scale = pow(2.0, 30);
+    // On aligne les primes sur l'échelle choisie
+    if (poly_mod_deg <= 4096) {
+        parms.set_coeff_modulus(CoeffModulus::Create(poly_mod_deg, {40, scale_bits, 40}));
+    } else if (poly_mod_deg <= 8192) {
+        parms.set_coeff_modulus(CoeffModulus::Create(poly_mod_deg, {60, scale_bits, 60}));
     } else {
-        parms.set_coeff_modulus(CoeffModulus::Create(poly_modulus_degree, {60, 40, 40, 40, 60}));
-        scale = pow(2.0, 40);
+        parms.set_coeff_modulus(CoeffModulus::Create(poly_mod_deg, {60, scale_bits, scale_bits, scale_bits, 60}));
     }
+    
+    scale = pow(2.0, (double)scale_bits);
+    context = make_shared<SEALContext>(parms, true, sec_level_type::none);
 
     // On autorise un niveau de securite plus faible si necessaire pour le benchmark
     context = make_shared<SEALContext>(parms, true, sec_level_type::none);
@@ -246,11 +264,8 @@ public:
   ~MoaiClient() { delete keygen; delete encryptor; delete decryptor; delete encoder; }
 
   py::bytes get_galois(int n, int batch_size) {
-      if (n <= 1) return py::bytes("");
-      int n1 = ceil(sqrt(n));
-      vector<int> steps = { batch_size, n1 * batch_size };
       GaloisKeys gks; 
-      keygen->create_galois_keys(steps, gks);
+      keygen->create_galois_keys(gks); 
       ostringstream os_g; gks.save(os_g);
       return py::bytes(os_g.str());
   }
@@ -316,7 +331,7 @@ public:
 
 PYBIND11_MODULE(moai_seal_backend, m) {
   py::class_<MoaiClient>(m, "MoaiClient")
-      .def(py::init<size_t>())
+      .def(py::init<size_t, int>(), py::arg("poly_modulus_degree"), py::arg("scale_bits") = 40)
       .def("encrypt_batch_interleaved", &MoaiClient::encrypt_batch_interleaved)
       .def("decrypt_batch", &MoaiClient::decrypt_batch)
       .def("get_galois", &MoaiClient::get_galois)
@@ -324,6 +339,7 @@ PYBIND11_MODULE(moai_seal_backend, m) {
   py::class_<MoaiServer>(m, "MoaiServer")
       .def(py::init<const string &>())
       .def("set_batch_size", &MoaiServer::set_batch_size)
+      .def("set_scale", &MoaiServer::set_scale)
       .def("set_galois", &MoaiServer::set_galois)
       .def("set_weights_bsgs", &MoaiServer::set_weights_bsgs)
       .def("he_matmul_vector_bsgs", &MoaiServer::he_matmul_vector_bsgs)

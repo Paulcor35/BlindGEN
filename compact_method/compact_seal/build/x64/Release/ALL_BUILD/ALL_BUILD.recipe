@@ -2,13 +2,13 @@
 <Project>
   <ProjectOutputs>
     <ProjectOutput>
-      <FullPath>C:\Users\willi\Documents\ISEN\M2\Projet start up\BlindGEN\compact_method\compact_seal\build\x64\Release\ZERO_CHECK</FullPath>
+      <FullPath>E:\Projets\BlindGEN\compact_method\compact_seal\build\x64\Release\ZERO_CHECK</FullPath>
     </ProjectOutput>
     <ProjectOutput>
-      <FullPath>C:\Users\willi\Documents\ISEN\M2\Projet start up\BlindGEN\compact_method\compact_seal\build\Release\blind_engine_sov.pyd</FullPath>
+      <FullPath>E:\Projets\BlindGEN\compact_method\compact_seal\build\Release\blind_engine_sov.pyd</FullPath>
     </ProjectOutput>
     <ProjectOutput>
-      <FullPath>C:\Users\willi\Documents\ISEN\M2\Projet start up\BlindGEN\compact_method\compact_seal\build\x64\Release\ALL_BUILD</FullPath>
+      <FullPath>E:\Projets\BlindGEN\compact_method\compact_seal\build\x64\Release\ALL_BUILD</FullPath>
     </ProjectOutput>
   </ProjectOutputs>
   <ContentFiles />

@@ -117,39 +117,69 @@ class MOAIPaperCKKS:
     """
 
     # Paramètres ajustés pour la compatibilité backend SEAL C++
-    _PAPER_POLY_MOD   = 8192                           # N = 2^13 (Ultra Rapide)
-    _PAPER_COEFF_BITS = [60, 40, 60]                   # ~160 bits (Optimisé pour N=8192)
-    _PAPER_SCALE      = 2 ** 25                         # paper: 2^25
+    # Paramètres de PRODUCTION (Production Mode) - Alignés sur Compact
+    _PAPER_POLY_MOD   = 16384                          # N = 2^14 (Haute Sécurité / Profondeur)
+    _PAPER_COEFF_BITS = [60, 40, 40, 40, 60]           # ~240 bits (128-bit security@16384)
+    _PAPER_SCALE      = 2 ** 40                         # Scale industrielle: 2^40
 
-    def __init__(self):
+    def __init__(self, poly_n=16384, scale_bits=40):
+        self.poly_n = poly_n
+        self.scale = 2 ** scale_bits
+        
+        # Adaptation dynamique du modulus chain pour la sécurité 128-bit
+        if poly_n <= 8192:
+            self.coeff_bits = [60, 40, 60]
+        elif poly_n == 16384:
+            self.coeff_bits = [60, 40, 40, 40, 60]
+        else: # 32768
+            self.coeff_bits = [60, 40, 40, 40, 40, 40, 40, 60]
+
         if not HAS_MOAI_BACKEND:
             if HAS_TENSEAL:
-                print("[INFO] Fallback sur TenSEAL (Plus lent).")
+                print(f"[INFO] Fallback TenSEAL (N={poly_n}).")
                 self._init_tenseal()
             else:
-                raise RuntimeError("Ni moai_seal_backend ni TenSEAL ne sont disponibles.")
+                raise RuntimeError("Backend MOAI non dispo.")
         else:
-            print(f"Initialisation du contexte MOAI SEAL (Backend Natif C++)...")
-            self.client = moai_seal_backend.MoaiClient(self._PAPER_POLY_MOD)
+            print(f"Initialisation MOAI SEAL (N={poly_n}, Scale=2^{scale_bits})...")
+            # PASSAGE CRITIQUE : on transmet les bits d'échelle au C++
+            self.client = moai_seal_backend.MoaiClient(self.poly_n, scale_bits)
             self.public_ctx = self.client.get_params()
             
-            # Paramètres Batching par défaut
             self.fhe_slice_size = 256 
-            self.batch_size = 1 # Valeur par défaut
+            self.batch_size = 1
             
-            # On instancie le serveur
             self.server = moai_seal_backend.MoaiServer(self.public_ctx)
+            if hasattr(self.server, "set_scale"):
+                self.server.set_scale(self.scale)
+                
             self.server.set_batch_size(self.batch_size)
-            
-            # Galois keys incluant les steps de batching
             self.galois_keys = self.client.get_galois(self.fhe_slice_size, self.batch_size)
             self.server.set_galois(self.galois_keys)
-            print("[OK] Contexte et Serveur Natifs prêts.")
+            print(f"[OK] Moteur MOAI prêt (N={poly_n}).")
+
+    def update_galois(self, fhe_slice_size, batch_size=1):
+        """Met à jour dynamiquement les clés de Galois pour une nouvelle dimension."""
+        if HAS_MOAI_BACKEND and hasattr(self, 'client'):
+            self.fhe_slice_size = fhe_slice_size
+            self.batch_size = batch_size
+            # Régénération des clés de Galois (Rotation steps dépendent de sqrt(N))
+            self.galois_keys = self.client.get_galois(self.fhe_slice_size, self.batch_size)
+            self.server.set_galois(self.galois_keys)
+            # On force le reset du cache de poids du serveur car la dimension a changé
+            if hasattr(self.server, "__weights_init_done"):
+                delattr(self.server, "__weights_init_done")
+            
+            # On nettoie aussi le cache de classe si présent
+            if hasattr(MOAIPaperCKKS, "_server_cache") and id(self.server) in MOAIPaperCKKS._server_cache:
+                MOAIPaperCKKS._server_cache.remove(id(self.server))
+                
+            print(f"[MOAI] Clés de Galois et Cache Poids mis à jour (N={fhe_slice_size})")
 
     def _init_tenseal(self):
-        poly_mod = self._PAPER_POLY_MOD
-        coeff_bits = self._PAPER_COEFF_BITS
-        scale = self._PAPER_SCALE
+        poly_mod = self.poly_n
+        coeff_bits = self.coeff_bits
+        scale = self.scale
         self.ctx = ts.context(
             ts.SCHEME_TYPE.CKKS,
             poly_modulus_degree=poly_mod,

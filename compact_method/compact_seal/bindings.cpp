@@ -28,6 +28,7 @@ public:
         sk_ = keygen.secret_key();
         keygen.create_public_key(pk_);
         keygen.create_relin_keys(rk_);
+        keygen.create_galois_keys(gk_);
         
         encoder_ = make_unique<CKKSEncoder>(*context_);
         evaluator_ = make_unique<Evaluator>(*context_);
@@ -55,28 +56,46 @@ public:
     }
 
     /**
-     * OPÉRATION SOUVERAINE : Multiplie deux Ciphertexts (Données x Poids)
-     * Le serveur ne connaît ni l'un ni l'autre.
+     * OPÉRATION RÉELLE : Produit Matrice-Vecteur Naïf (Fidèle au modèle)
+     * On multiplie un vecteur d'input (Ciphertext) par une matrice (Plaintext Matrix)
+     * sans les optimisations MOAI pour montrer la différence.
      */
-    py::bytes process_layer_compact(py::bytes enc_input, py::bytes enc_weights) {
-        // Charger l'entrée chiffrée
+    py::bytes process_layer_compact(py::bytes enc_input, py::list matrix_plain) {
+        // Charger l'entrée chiffrée (Vecteur X)
         string in_str = enc_input;
         stringstream ss_in(in_str);
         Ciphertext ct_in;
         ct_in.load(*context_, ss_in);
 
-        // Charger les poids chiffrés
-        string w_str = enc_weights;
-        stringstream ss_w(w_str);
-        Ciphertext ct_w;
-        ct_w.load(*context_, ss_w);
-        
-        // MULTIPLICATION HOMOMORPHIQUE (Ciphertext * Ciphertext)
         Ciphertext ct_res;
-        evaluator_->multiply(ct_in, ct_w, ct_res);
+        bool first = true;
+
+        // On parcourt chaque ligne de la matrice (256 lignes)
+        // C'est l'approche naïve sans Packing Diagonal
+        for (size_t i = 0; i < matrix_plain.size(); i++) {
+            py::list row = matrix_plain[i].cast<py::list>();
+            vector<double> row_vec;
+            for (auto item : row) row_vec.push_back(item.cast<double>());
+
+            Plaintext pt_row;
+            encoder_->encode(row_vec, scale_, pt_row);
+
+            // Rotation du vecteur d'entrée pour aligner les éléments (Calcul partiel)
+            Ciphertext ct_rot;
+            evaluator_->rotate_vector(ct_in, (int)i, gk_, ct_rot);
+            
+            // Multiplication
+            evaluator_->multiply_plain_inplace(ct_rot, pt_row);
+            
+            if (first) {
+                ct_res = ct_rot;
+                first = false;
+            } else {
+                evaluator_->add_inplace(ct_res, ct_rot);
+            }
+        }
         
-        // Relinearization (Obligatoire après CT*CT)
-        evaluator_->relinearize_inplace(ct_res, rk_);
+        // Relinearization et Rescale
         evaluator_->rescale_to_next_inplace(ct_res);
 
         stringstream ss_res;
@@ -109,6 +128,7 @@ private:
     PublicKey pk_;
     SecretKey sk_;
     RelinKeys rk_;
+    GaloisKeys gk_;
     unique_ptr<CKKSEncoder> encoder_;
     unique_ptr<Evaluator> evaluator_;
     unique_ptr<Encryptor> encryptor_;
